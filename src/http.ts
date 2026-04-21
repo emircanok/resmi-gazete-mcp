@@ -26,6 +26,33 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+const CHARSET_HEADER_RE = /charset\s*=\s*["']?([^"';\s]+)/i;
+const META_CHARSET_RE = /<meta\s+charset\s*=\s*["']?([^"'\s/>]+)/i;
+const META_HTTP_EQUIV_RE = /<meta[^>]+http-equiv\s*=\s*["']?content-type["']?[^>]*charset\s*=\s*["']?([^"'\s/>]+)/i;
+
+function detectCharset(contentType: string, sample: Buffer): string {
+  const fromHeader = contentType.match(CHARSET_HEADER_RE);
+  if (fromHeader) return fromHeader[1].toLowerCase();
+
+  // Sniff the opening of the document as latin1 so byte values survive intact.
+  const head = sample.subarray(0, 2048).toString("latin1");
+  const metaCharset = head.match(META_CHARSET_RE);
+  if (metaCharset) return metaCharset[1].toLowerCase();
+  const httpEquiv = head.match(META_HTTP_EQUIV_RE);
+  if (httpEquiv) return httpEquiv[1].toLowerCase();
+
+  return "utf-8";
+}
+
+function decodeTextBody(bytes: Buffer, contentType: string): string {
+  const charset = detectCharset(contentType, bytes);
+  try {
+    return new TextDecoder(charset, { fatal: false }).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  }
+}
+
 export async function fetchUrl(url: string, opts: FetchOptions = {}): Promise<FetchResult> {
   const {
     asBinary = false,
@@ -100,7 +127,7 @@ export async function fetchUrl(url: string, opts: FetchOptions = {}): Promise<Fe
           return { url, status, contentType, body: "", bytes, fromCache: false };
         }
 
-        const body = bytes.toString("utf8");
+        const body = decodeTextBody(bytes, contentType);
         await putInCache(url, {
           body,
           contentType,
